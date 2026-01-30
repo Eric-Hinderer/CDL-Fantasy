@@ -19,7 +19,7 @@
     "db:studio": "npm run db:studio --workspace=backend",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "setup": "npm install && npm run docker:up && sleep 3 && npm run db:migrate && npm run db:seed"
+    "setup": "npm install && npm run docker:up && npm run db:migrate && npm run db:seed"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

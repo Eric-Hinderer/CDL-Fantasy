@@ -98,6 +98,17 @@ export function setupDraftSocket(io: Server): void {
       console.log(`User ${socket.userId} left draft room for league ${leagueId}`);
     });
 
+    // Start draft (broadcasts to all users)
+    socket.on('start-draft', async (leagueId: string) => {
+      try {
+        console.log(`Broadcasting draft start for league ${leagueId}`);
+        // Broadcast to all users in the draft room that draft has started
+        io.to(`draft:${leagueId}`).emit('draft-started', { leagueId });
+      } catch (error) {
+        console.error('Error broadcasting draft start:', error);
+      }
+    });
+
     // Make a pick
     socket.on('make-pick', async (data: { leagueId: string; playerId: string }) => {
       try {

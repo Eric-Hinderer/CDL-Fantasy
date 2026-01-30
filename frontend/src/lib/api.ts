@@ -117,6 +117,10 @@ export const matchupsApi = {
     const res = await api.get(`/api/matchups/team/${teamId}/current`);
     return res.data;
   },
+  simulateMatchup: async (matchupId: string) => {
+    const res = await api.post(`/api/matchups/${matchupId}/simulate`);
+    return res.data;
+  },
 };
 
 // Standings API

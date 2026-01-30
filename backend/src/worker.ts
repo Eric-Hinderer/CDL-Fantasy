@@ -13,6 +13,7 @@ import {
   updatePeriodStandings,
 } from './services/dataIngestionService.js';
 import { computeMatchFantasyPoints } from './services/scoringService.js';
+import { makeAutoPick } from './routes/draft.js';
 
 console.log('🚀 Starting CDL Fantasy Worker...');
 
@@ -152,140 +153,9 @@ async function lockLineupsForPeriod(scoringPeriodId: string): Promise<void> {
   console.log(`Locked lineups for scoring period: ${period.name}`);
 }
 
+// processAutoPick now delegates to shared makeAutoPick function in routes/draft.ts
 async function processAutoPick(draftId: string, expectedPickNumber: number): Promise<void> {
-  const draftSettings = await prisma.draftSettings.findUnique({
-    where: { id: draftId },
-    include: {
-      picks: true,
-      league: {
-        include: {
-          fantasyTeams: true,
-        },
-      },
-    },
-  });
-
-  if (!draftSettings) {
-    console.log(`Draft ${draftId} not found, skipping auto-pick`);
-    return;
-  }
-
-  // Check if this pick was already made (user picked in time)
-  if (draftSettings.currentPick !== expectedPickNumber) {
-    console.log(`Pick ${expectedPickNumber} already made, skipping auto-pick`);
-    return;
-  }
-
-  if (draftSettings.status !== 'IN_PROGRESS') {
-    console.log(`Draft ${draftId} is not in progress, skipping auto-pick`);
-    return;
-  }
-
-  // Determine who should be picking
-  const teamCount = draftSettings.draftOrder.length as number;
-  const currentPick = draftSettings.currentPick;
-  const round = Math.ceil(currentPick / teamCount);
-  const positionInRound = (currentPick - 1) % teamCount;
-
-  // Snake draft: reverse direction on even rounds
-  const isReverseRound = round % 2 === 0;
-  const orderIndex = isReverseRound
-    ? teamCount - 1 - positionInRound
-    : positionInRound;
-
-  const draftOrder = draftSettings.draftOrder as string[];
-  const currentTeamId = draftOrder[orderIndex];
-
-  // Find best available player (by ADP)
-  const draftedPlayerIds = draftSettings.picks.map((p) => p.playerId);
-
-  const bestAvailable = await prisma.cdlPlayer.findFirst({
-    where: {
-      isActive: true,
-      id: { notIn: draftedPlayerIds },
-    },
-    orderBy: [
-      { averageDraftPosition: 'asc' },
-      { gamerTag: 'asc' },
-    ],
-  });
-
-  if (!bestAvailable) {
-    console.error(`No players available for auto-pick in draft ${draftId}`);
-    return;
-  }
-
-  // Make the pick
-  await prisma.draftPick.create({
-    data: {
-      draftSettingsId: draftId,
-      fantasyTeamId: currentTeamId,
-      playerId: bestAvailable.id,
-      pickNumber: currentPick,
-      round,
-      isAutoPick: true,
-    },
-  });
-
-  // Add to roster
-  await prisma.rosterSlot.create({
-    data: {
-      fantasyTeamId: currentTeamId,
-      playerId: bestAvailable.id,
-    },
-  });
-
-  // Check if draft is complete
-  const totalPicks = teamCount * draftSettings.league.rosterSize;
-  const isComplete = currentPick >= totalPicks;
-
-  if (isComplete) {
-    // Complete draft
-    await prisma.$transaction([
-      prisma.draftSettings.update({
-        where: { id: draftId },
-        data: {
-          status: 'COMPLETED',
-          endTime: new Date(),
-        },
-      }),
-      prisma.league.update({
-        where: { id: draftSettings.leagueId },
-        data: { status: 'IN_SEASON' },
-      }),
-    ]);
-
-    console.log(`Draft ${draftId} completed via auto-pick`);
-  } else {
-    // Advance to next pick
-    const nextPick = currentPick + 1;
-    const nextRound = Math.ceil(nextPick / teamCount);
-
-    await prisma.draftSettings.update({
-      where: { id: draftId },
-      data: {
-        currentPick: nextPick,
-        currentRound: nextRound,
-      },
-    });
-
-    // Schedule next auto-pick
-    const { draftQueue } = await import('./lib/queue.js');
-    await draftQueue.add(
-      'auto-pick',
-      {
-        type: 'auto-pick',
-        draftId,
-        pickNumber: nextPick,
-      },
-      {
-        delay: draftSettings.secondsPerPick * 1000,
-        jobId: `auto-pick-${draftId}-${nextPick}`,
-      }
-    );
-  }
-
-  console.log(`Auto-picked ${bestAvailable.gamerTag} for team ${currentTeamId}`);
+  await makeAutoPick(draftId, expectedPickNumber);
 }
 
 // ============================================================================

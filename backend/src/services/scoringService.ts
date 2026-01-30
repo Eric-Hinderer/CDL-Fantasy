@@ -69,7 +69,7 @@ export async function computeMatchFantasyPoints(
     throw new Error('League not found');
   }
 
-  const rules = league.scoringRules as ScoringRules;
+  const rules = league.scoringRules as unknown as ScoringRules;
 
   // Get all stat lines for this match
   const statLines = await prisma.playerStatLine.findMany({

@@ -5,6 +5,8 @@ import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { DEFAULT_SCORING_RULES } from '../config/index.js';
 import { generateJoinCode, generateMatchups } from '../services/leagueService.js';
+// Scoring service functions available if needed:
+// import { updateTeamTotals, resolveMatchups, computeMatchFantasyPoints } from '../services/scoringService.js';
 
 const router = Router();
 
@@ -79,7 +81,7 @@ router.post('/', authenticate, async (req, res, next) => {
         maxTeams: data.maxTeams,
         rosterSize: data.rosterSize,
         starterCount: data.starterCount,
-        scoringRules: data.scoringRules || DEFAULT_SCORING_RULES,
+        scoringRules: (data.scoringRules || DEFAULT_SCORING_RULES) as any,
         ownerId: req.user!.id,
         // Create owner's fantasy team automatically
         fantasyTeams: {

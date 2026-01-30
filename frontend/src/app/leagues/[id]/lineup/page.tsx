@@ -7,6 +7,7 @@ import { leaguesApi, lineupsApi } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { formatDateTime } from '@/lib/utils';
+import { AlertCircle, CheckCircle } from 'lucide-react';
 
 interface LineupSlot {
   rosterSlotId: string;
@@ -25,6 +26,8 @@ export default function LineupPage() {
   const queryClient = useQueryClient();
   const [slots, setSlots] = useState<LineupSlot[]>([]);
   const [hasChanges, setHasChanges] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Get league data to find user's team
   const { data: leagueData } = useQuery({
@@ -87,6 +90,14 @@ export default function LineupPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['lineup', userTeam?.id, activePeriod?.id] });
       setHasChanges(false);
+      setErrorMessage(null);
+      setSuccessMessage('Lineup saved successfully!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    },
+    onError: (error: any) => {
+      const message = error.response?.data?.error || error.response?.data?.message || error.message || 'Failed to save lineup';
+      setErrorMessage(message);
+      setSuccessMessage(null);
     },
   });
 
@@ -143,6 +154,7 @@ export default function LineupPage() {
 
   const starters = slots.filter((s) => s.isStarter);
   const bench = slots.filter((s) => !s.isStarter);
+  const starterCount = league?.starterCount || 4;
 
   return (
     <div className="space-y-6">
@@ -154,12 +166,41 @@ export default function LineupPage() {
           </p>
         </div>
         <Button
-          onClick={() => saveMutation.mutate()}
-          disabled={!hasChanges || isLocked || saveMutation.isPending}
+          onClick={() => {
+            setErrorMessage(null);
+            saveMutation.mutate();
+          }}
+          disabled={!hasChanges || isLocked || saveMutation.isPending || starters.length !== starterCount}
         >
           {saveMutation.isPending ? 'Saving...' : 'Save Lineup'}
         </Button>
       </div>
+
+      {/* Error Message */}
+      {errorMessage && (
+        <div className="p-4 bg-red-900/50 border border-red-700 rounded-lg flex items-center gap-3">
+          <AlertCircle className="h-5 w-5 text-red-400 flex-shrink-0" />
+          <p className="text-red-200">{errorMessage}</p>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {successMessage && (
+        <div className="p-4 bg-green-900/50 border border-green-700 rounded-lg flex items-center gap-3">
+          <CheckCircle className="h-5 w-5 text-green-400 flex-shrink-0" />
+          <p className="text-green-200">{successMessage}</p>
+        </div>
+      )}
+
+      {/* Starter Count Warning */}
+      {starters.length !== starterCount && (
+        <div className="p-4 bg-yellow-900/50 border border-yellow-700 rounded-lg flex items-center gap-3">
+          <AlertCircle className="h-5 w-5 text-yellow-400 flex-shrink-0" />
+          <p className="text-yellow-200">
+            You must have exactly {starterCount} starters. Currently have {starters.length}.
+          </p>
+        </div>
+      )}
 
       {isLocked && (
         <div className="p-4 bg-yellow-900/50 border border-yellow-700 rounded-lg">

@@ -22,6 +22,7 @@ export function formatDateTime(date: string | Date): string {
   });
 }
 
-export function formatPoints(points: number): string {
+export function formatPoints(points: number | null | undefined): string {
+  if (points == null) return '0.0';
   return points.toFixed(1);
 }

@@ -384,4 +384,69 @@ async function scheduleAutoPick(draftId: string, pickNumber: number, delaySecond
   );
 }
 
+/**
+ * Make an auto-pick for a draft (called from worker)
+ * Picks best available player for the current team
+ */
+export async function makeAutoPick(draftId: string, expectedPickNumber: number): Promise<void> {
+  const draftSettings = await prisma.draftSettings.findUnique({
+    where: { id: draftId },
+    include: {
+      picks: true,
+      league: {
+        include: {
+          fantasyTeams: true,
+        },
+      },
+    },
+  });
+
+  if (!draftSettings) {
+    console.log(`Draft ${draftId} not found, skipping auto-pick`);
+    return;
+  }
+
+  // Check if this pick was already made (user picked in time)
+  if (draftSettings.currentPick !== expectedPickNumber) {
+    console.log(`Pick ${expectedPickNumber} already made, skipping auto-pick`);
+    return;
+  }
+
+  if (draftSettings.status !== 'IN_PROGRESS') {
+    console.log(`Draft ${draftId} is not in progress, skipping auto-pick`);
+    return;
+  }
+
+  // Find best available player (by ADP)
+  const draftedPlayerIds = draftSettings.picks.map((p) => p.playerId);
+  const bestAvailable = await prisma.cdlPlayer.findFirst({
+    where: {
+      isActive: true,
+      id: { notIn: draftedPlayerIds },
+    },
+    orderBy: [
+      { averageDraftPosition: 'asc' },
+      { gamerTag: 'asc' },
+    ],
+  });
+
+  if (!bestAvailable) {
+    console.error(`No players available for auto-pick in draft ${draftId}`);
+    return;
+  }
+
+  // Get the current team's user ID (we need it for makePick)
+  const { currentTeamId } = getCurrentPickInfo(draftSettings);
+  const currentTeam = draftSettings.league.fantasyTeams.find(t => t.id === currentTeamId);
+  
+  if (!currentTeam) {
+    console.error(`Current team ${currentTeamId} not found`);
+    return;
+  }
+
+  // Use the shared makePick function
+  const result = await makePick(draftSettings.leagueId, currentTeam.userId, bestAvailable.id, true);
+  console.log(`Auto-picked ${bestAvailable.gamerTag} for team ${currentTeam.name}. Draft complete: ${result.isComplete}`);
+}
+
 export { router as draftRouter };

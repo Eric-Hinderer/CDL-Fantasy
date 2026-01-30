@@ -237,15 +237,15 @@ async function main() {
 
   console.log('Created demo league');
 
-  // Create fantasy teams for each user
+  // Create fantasy teams for each user (wins/losses will be updated after matchups)
   const team1 = await prisma.fantasyTeam.create({
     data: {
       name: 'FaZe Fanatics',
       userId: user1.id,
       leagueId: league.id,
-      wins: 2,
-      losses: 1,
-      totalPoints: 156.5,
+      wins: 0,
+      losses: 0,
+      totalPoints: 0,
     },
   });
 
@@ -254,9 +254,9 @@ async function main() {
       name: 'OpTic Army',
       userId: user2.id,
       leagueId: league.id,
-      wins: 2,
-      losses: 1,
-      totalPoints: 148.3,
+      wins: 0,
+      losses: 0,
+      totalPoints: 0,
     },
   });
 
@@ -265,9 +265,9 @@ async function main() {
       name: 'Ultra Fans',
       userId: user3.id,
       leagueId: league.id,
-      wins: 1,
-      losses: 2,
-      totalPoints: 135.7,
+      wins: 0,
+      losses: 0,
+      totalPoints: 0,
     },
   });
 
@@ -276,9 +276,9 @@ async function main() {
       name: 'Surge Squad',
       userId: user4.id,
       leagueId: league.id,
-      wins: 1,
-      losses: 2,
-      totalPoints: 122.4,
+      wins: 0,
+      losses: 0,
+      totalPoints: 0,
     },
   });
 
@@ -296,13 +296,13 @@ async function main() {
     [allPlayers[3], allPlayers[4], allPlayers[11], allPlayers[12], allPlayers[19], allPlayers[20]], // Team 4
   ];
 
-  const teams = [team1, team2, team3, team4];
+  const fantasyTeams = [team1, team2, team3, team4];
 
-  for (let i = 0; i < teams.length; i++) {
+  for (let i = 0; i < fantasyTeams.length; i++) {
     for (const player of teamPlayers[i]) {
       await prisma.rosterSlot.create({
         data: {
-          fantasyTeamId: teams[i].id,
+          fantasyTeamId: fantasyTeams[i].id,
           playerId: player.id,
         },
       });
@@ -366,15 +366,166 @@ async function main() {
 
   console.log('Created scoring periods');
 
-  // Create matchups for period 1 (completed)
+  // Link CDL matches to scoring periods and create player stats
+  const allCdlMatches = await prisma.cdlMatch.findMany({
+    where: { status: 'COMPLETED' },
+    take: 4,
+  });
+
+  // Update first 2 matches to belong to period1
+  if (allCdlMatches.length >= 2) {
+    await prisma.cdlMatch.update({
+      where: { id: allCdlMatches[0].id },
+      data: { scoringPeriodId: period1.id },
+    });
+    await prisma.cdlMatch.update({
+      where: { id: allCdlMatches[1].id },
+      data: { scoringPeriodId: period1.id },
+    });
+  }
+
+  // Create player stat lines for period 1 matches (for all rostered players)
+  const allRosteredPlayers = await prisma.rosterSlot.findMany({
+    include: { player: true },
+  });
+
+  // Generate random stats for each rostered player in period 1
+  for (const rosterSlot of allRosteredPlayers) {
+    if (allCdlMatches.length > 0) {
+      const matchId = allCdlMatches[0].id;
+      
+      // Random stats
+      const kills = Math.floor(Math.random() * 30) + 15;
+      const deaths = Math.floor(Math.random() * 25) + 10;
+      const assists = Math.floor(Math.random() * 10) + 2;
+      const damage = Math.floor(Math.random() * 5000) + 3000;
+
+      const statLine = await prisma.playerStatLine.create({
+        data: {
+          matchId,
+          playerId: rosterSlot.playerId,
+          mapNumber: 1,
+          gameMode: 'Hardpoint',
+          kills,
+          deaths,
+          assists,
+          damage,
+          objectiveTime: Math.floor(Math.random() * 120),
+          bombPlants: 0,
+          bombDefuses: 0,
+          firstBloods: Math.floor(Math.random() * 3),
+        },
+      });
+
+      // Calculate fantasy points based on default scoring
+      // kills: 1.0, deaths: -0.5, assists: 0.25, damage: 0.01
+      const points = (kills * 1.0) + (deaths * -0.5) + (assists * 0.25) + (damage * 0.01);
+
+      await prisma.fantasyPoints.create({
+        data: {
+          statLineId: statLine.id,
+          leagueId: league.id,
+          points,
+          breakdown: {
+            kills: kills * 1.0,
+            deaths: deaths * -0.5,
+            assists: assists * 0.25,
+            damage: damage * 0.01,
+          },
+        },
+      });
+    }
+  }
+
+  console.log('Created player stats and fantasy points');
+
+  // Helper function to calculate team score from lineup starters
+  async function calculateTeamScore(fantasyTeamId: string, scoringPeriodId: string): Promise<number> {
+    const lineup = await prisma.lineup.findUnique({
+      where: {
+        fantasyTeamId_scoringPeriodId: { fantasyTeamId, scoringPeriodId },
+      },
+      include: {
+        slots: {
+          where: { isStarter: true },
+          include: {
+            rosterSlot: {
+              include: {
+                player: {
+                  include: {
+                    statLines: {
+                      where: {
+                        match: { scoringPeriodId },
+                      },
+                      include: {
+                        fantasyPoints: {
+                          where: { leagueId: league.id },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!lineup) return 0;
+
+    return lineup.slots.reduce((total, slot) => {
+      const playerPoints = slot.rosterSlot.player.statLines.reduce((sum, statLine) => {
+        return sum + (statLine.fantasyPoints[0]?.points || 0);
+      }, 0);
+      return total + playerPoints;
+    }, 0);
+  }
+
+  // Create lineups for period 1 FIRST (before matchups so we can calculate scores)
+  for (let i = 0; i < fantasyTeams.length; i++) {
+    const rosterSlots = await prisma.rosterSlot.findMany({
+      where: { fantasyTeamId: fantasyTeams[i].id },
+    });
+
+    const lineup = await prisma.lineup.create({
+      data: {
+        fantasyTeamId: fantasyTeams[i].id,
+        scoringPeriodId: period1.id,
+        isLocked: true,
+      },
+    });
+
+    // Set first 4 as starters
+    for (let j = 0; j < rosterSlots.length; j++) {
+      await prisma.lineupSlot.create({
+        data: {
+          lineupId: lineup.id,
+          rosterSlotId: rosterSlots[j].id,
+          position: j,
+          isStarter: j < 4,
+        },
+      });
+    }
+  }
+
+  console.log('Created lineups for period 1');
+
+  // Calculate actual team scores based on player stats
+  const team1Score = await calculateTeamScore(team1.id, period1.id);
+  const team4Score = await calculateTeamScore(team4.id, period1.id);
+  const team2Score = await calculateTeamScore(team2.id, period1.id);
+  const team3Score = await calculateTeamScore(team3.id, period1.id);
+
+  // Create matchups for period 1 (completed) with calculated scores
   await prisma.matchup.create({
     data: {
       scoringPeriodId: period1.id,
       team1Id: team1.id,
       team2Id: team4.id,
-      team1Score: 52.5,
-      team2Score: 45.2,
-      winnerId: team1.id,
+      team1Score: Math.round(team1Score * 10) / 10,
+      team2Score: Math.round(team4Score * 10) / 10,
+      winnerId: team1Score >= team4Score ? team1.id : team4.id,
       isCompleted: true,
     },
   });
@@ -384,12 +535,30 @@ async function main() {
       scoringPeriodId: period1.id,
       team1Id: team2.id,
       team2Id: team3.id,
-      team1Score: 48.3,
-      team2Score: 51.7,
-      winnerId: team3.id,
+      team1Score: Math.round(team2Score * 10) / 10,
+      team2Score: Math.round(team3Score * 10) / 10,
+      winnerId: team2Score >= team3Score ? team2.id : team3.id,
       isCompleted: true,
     },
   });
+
+  // Update team records based on period 1 matchup results
+  // Team1 vs Team4
+  if (team1Score >= team4Score) {
+    await prisma.fantasyTeam.update({ where: { id: team1.id }, data: { wins: 1, totalPoints: team1Score } });
+    await prisma.fantasyTeam.update({ where: { id: team4.id }, data: { losses: 1, totalPoints: team4Score } });
+  } else {
+    await prisma.fantasyTeam.update({ where: { id: team1.id }, data: { losses: 1, totalPoints: team1Score } });
+    await prisma.fantasyTeam.update({ where: { id: team4.id }, data: { wins: 1, totalPoints: team4Score } });
+  }
+  // Team2 vs Team3
+  if (team2Score >= team3Score) {
+    await prisma.fantasyTeam.update({ where: { id: team2.id }, data: { wins: 1, totalPoints: team2Score } });
+    await prisma.fantasyTeam.update({ where: { id: team3.id }, data: { losses: 1, totalPoints: team3Score } });
+  } else {
+    await prisma.fantasyTeam.update({ where: { id: team2.id }, data: { losses: 1, totalPoints: team2Score } });
+    await prisma.fantasyTeam.update({ where: { id: team3.id }, data: { wins: 1, totalPoints: team3Score } });
+  }
 
   // Create matchups for period 2 (in progress)
   await prisma.matchup.create({
@@ -412,15 +581,15 @@ async function main() {
 
   console.log('Created matchups');
 
-  // Create lineups for current period
-  for (let i = 0; i < teams.length; i++) {
+  // Create lineups for current period (period 2)
+  for (let i = 0; i < fantasyTeams.length; i++) {
     const rosterSlots = await prisma.rosterSlot.findMany({
-      where: { fantasyTeamId: teams[i].id },
+      where: { fantasyTeamId: fantasyTeams[i].id },
     });
 
     const lineup = await prisma.lineup.create({
       data: {
-        fantasyTeamId: teams[i].id,
+        fantasyTeamId: fantasyTeams[i].id,
         scoringPeriodId: period2.id,
         isLocked: false,
       },
