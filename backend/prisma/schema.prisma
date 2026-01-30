@@ -1,0 +1,465 @@
+// Fantasy CDL Database Schema
+// Prisma schema for PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USERS & AUTH
+// ============================================================================
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  username      String   @unique
+  passwordHash  String
+  displayName   String?
+  avatarUrl     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  ownedLeagues    League[]       @relation("LeagueOwner")
+  fantasyTeams    FantasyTeam[]
+
+  @@index([email])
+  @@index([username])
+}
+
+// ============================================================================
+// CDL DATA (Real-world teams and players)
+// ============================================================================
+
+model CdlTeam {
+  id          String   @id @default(cuid())
+  externalId  String   @unique  // ID from data source
+  name        String             // e.g., "Atlanta FaZe"
+  abbreviation String            // e.g., "ATL"
+  logoUrl     String?
+  primaryColor String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  players     CdlPlayer[]
+  homeMatches CdlMatch[]   @relation("HomeTeam")
+  awayMatches CdlMatch[]   @relation("AwayTeam")
+
+  @@index([externalId])
+}
+
+model CdlPlayer {
+  id           String   @id @default(cuid())
+  externalId   String   @unique  // ID from data source
+  gamerTag     String             // e.g., "Simp"
+  realName     String?            // e.g., "Chris Lehr"
+  photoUrl     String?
+  role         String?            // e.g., "SMG", "AR"
+  country      String?
+  isActive     Boolean  @default(true)
+  averageDraftPosition Float?     // ADP for auto-draft
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Current CDL team (can be null if free agent)
+  cdlTeamId    String?
+  cdlTeam      CdlTeam?  @relation(fields: [cdlTeamId], references: [id])
+
+  // Relations
+  statLines    PlayerStatLine[]
+  rosterSlots  RosterSlot[]
+  draftPicks   DraftPick[]
+
+  @@index([externalId])
+  @@index([cdlTeamId])
+  @@index([gamerTag])
+}
+
+// ============================================================================
+// LEAGUES
+// ============================================================================
+
+model League {
+  id              String   @id @default(cuid())
+  name            String
+  joinCode        String   @unique  // 6-char code to join
+  isPublic        Boolean  @default(false)
+  maxTeams        Int      @default(8)
+  rosterSize      Int      @default(6)  // Total roster spots
+  starterCount    Int      @default(4)  // Number of starters
+  status          LeagueStatus @default(PRE_DRAFT)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Owner
+  ownerId         String
+  owner           User     @relation("LeagueOwner", fields: [ownerId], references: [id])
+
+  // Scoring Rules (JSON for flexibility)
+  scoringRules    Json     @default("{}")  // ScoringRules type
+
+  // Relations
+  fantasyTeams    FantasyTeam[]
+  scoringPeriods  ScoringPeriod[]
+  draftSettings   DraftSettings?
+  fantasyPoints   FantasyPoints[]
+
+  @@index([joinCode])
+  @@index([ownerId])
+}
+
+enum LeagueStatus {
+  PRE_DRAFT
+  DRAFTING
+  IN_SEASON
+  COMPLETED
+}
+
+// ============================================================================
+// FANTASY TEAMS
+// ============================================================================
+
+model FantasyTeam {
+  id          String   @id @default(cuid())
+  name        String
+  logoUrl     String?
+  wins        Int      @default(0)
+  losses      Int      @default(0)
+  ties        Int      @default(0)
+  totalPoints Float    @default(0)  // Total fantasy points scored
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Owner
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+
+  // League
+  leagueId    String
+  league      League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  // Relations
+  rosterSlots RosterSlot[]
+  lineups     Lineup[]
+  draftPicks  DraftPick[]
+  homeMatchups Matchup[]  @relation("HomeTeam")
+  awayMatchups Matchup[]  @relation("AwayTeam")
+  teamTotals  TeamTotal[]
+
+  @@unique([userId, leagueId])  // One team per user per league
+  @@index([leagueId])
+  @@index([userId])
+}
+
+// ============================================================================
+// ROSTERS & LINEUPS
+// ============================================================================
+
+model RosterSlot {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // The fantasy team this slot belongs to
+  fantasyTeamId String
+  fantasyTeam   FantasyTeam @relation(fields: [fantasyTeamId], references: [id], onDelete: Cascade)
+
+  // The CDL player in this slot
+  playerId      String
+  player        CdlPlayer   @relation(fields: [playerId], references: [id])
+
+  // Relations
+  lineupSlots   LineupSlot[]
+
+  @@unique([fantasyTeamId, playerId])  // Can't have same player twice
+  @@index([fantasyTeamId])
+  @@index([playerId])
+}
+
+model Lineup {
+  id               String   @id @default(cuid())
+  isLocked         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // The fantasy team
+  fantasyTeamId    String
+  fantasyTeam      FantasyTeam   @relation(fields: [fantasyTeamId], references: [id], onDelete: Cascade)
+
+  // The scoring period this lineup is for
+  scoringPeriodId  String
+  scoringPeriod    ScoringPeriod @relation(fields: [scoringPeriodId], references: [id])
+
+  // Relations
+  slots            LineupSlot[]
+
+  @@unique([fantasyTeamId, scoringPeriodId])  // One lineup per team per period
+  @@index([fantasyTeamId])
+  @@index([scoringPeriodId])
+}
+
+model LineupSlot {
+  id          String   @id @default(cuid())
+  position    Int               // 0-3 = starter, 4+ = bench
+  isStarter   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // The lineup
+  lineupId    String
+  lineup      Lineup    @relation(fields: [lineupId], references: [id], onDelete: Cascade)
+
+  // The roster slot (player)
+  rosterSlotId String
+  rosterSlot   RosterSlot @relation(fields: [rosterSlotId], references: [id])
+
+  @@unique([lineupId, rosterSlotId])  // Can't have same slot twice in lineup
+  @@unique([lineupId, position])       // Can't have two players at same position
+  @@index([lineupId])
+}
+
+// ============================================================================
+// SCORING PERIODS & MATCHUPS
+// ============================================================================
+
+model ScoringPeriod {
+  id          String   @id @default(cuid())
+  name        String             // e.g., "Qualifier Week 1", "Major 1 Weekend"
+  startDate   DateTime
+  endDate     DateTime
+  lockTime    DateTime           // When lineups lock
+  periodType  PeriodType
+  isActive    Boolean  @default(false)
+  isCompleted Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // League
+  leagueId    String
+  league      League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  // Relations
+  lineups     Lineup[]
+  matchups    Matchup[]
+  cdlMatches  CdlMatch[]
+  teamTotals  TeamTotal[]
+
+  @@unique([leagueId, name])  // Unique period names per league
+  @@index([leagueId])
+  @@index([startDate])
+  @@index([isActive])
+}
+
+enum PeriodType {
+  QUALIFIER_WEEK
+  MAJOR_WEEKEND
+  PLAYOFF
+  CHAMPIONSHIP
+}
+
+model Matchup {
+  id               String   @id @default(cuid())
+  team1Score       Float?           // Points scored by team 1
+  team2Score       Float?           // Points scored by team 2
+  winnerId         String?          // ID of winning team
+  isCompleted      Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Scoring period
+  scoringPeriodId  String
+  scoringPeriod    ScoringPeriod @relation(fields: [scoringPeriodId], references: [id])
+
+  // Teams
+  team1Id          String
+  team1            FantasyTeam   @relation("HomeTeam", fields: [team1Id], references: [id])
+  team2Id          String
+  team2            FantasyTeam   @relation("AwayTeam", fields: [team2Id], references: [id])
+
+  @@unique([scoringPeriodId, team1Id, team2Id])  // Idempotent matchup creation
+  @@index([scoringPeriodId])
+}
+
+// ============================================================================
+// CDL MATCHES & STATS
+// ============================================================================
+
+model CdlMatch {
+  id           String   @id @default(cuid())
+  externalId   String   @unique  // ID from data source
+  scheduledAt  DateTime
+  status       MatchStatus @default(SCHEDULED)
+  homeScore    Int?
+  awayScore    Int?
+  winnerId     String?           // externalId of winning team
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Teams
+  homeTeamId   String
+  homeTeam     CdlTeam  @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeamId   String
+  awayTeam     CdlTeam  @relation("AwayTeam", fields: [awayTeamId], references: [id])
+
+  // Scoring period (optional - for MVP we may not link all matches)
+  scoringPeriodId String?
+  scoringPeriod   ScoringPeriod? @relation(fields: [scoringPeriodId], references: [id])
+
+  // Relations
+  statLines    PlayerStatLine[]
+
+  @@index([externalId])
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([scoringPeriodId])
+}
+
+enum MatchStatus {
+  SCHEDULED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+model PlayerStatLine {
+  id            String   @id @default(cuid())
+  mapNumber     Int?              // Which map in the series (1-5)
+  gameMode      String?           // "Hardpoint", "Search & Destroy", "Control"
+  kills         Int      @default(0)
+  deaths        Int      @default(0)
+  assists       Int      @default(0)
+  damage        Int      @default(0)
+  objectiveTime Float    @default(0)  // HP hill time in seconds
+  bombPlants    Int      @default(0)  // S&D
+  bombDefuses   Int      @default(0)  // S&D
+  firstBloods   Int      @default(0)  // S&D
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // The match
+  matchId       String
+  match         CdlMatch  @relation(fields: [matchId], references: [id])
+
+  // The player
+  playerId      String
+  player        CdlPlayer @relation(fields: [playerId], references: [id])
+
+  // Relations
+  fantasyPoints FantasyPoints[]
+
+  @@unique([matchId, playerId, mapNumber])  // Idempotent stat ingestion
+  @@index([matchId])
+  @@index([playerId])
+}
+
+// ============================================================================
+// FANTASY SCORING
+// ============================================================================
+
+model FantasyPoints {
+  id              String   @id @default(cuid())
+  points          Float
+  breakdown       Json     @default("{}")  // { kills: 10, deaths: -5, ... }
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // The stat line this is computed from
+  statLineId      String
+  statLine        PlayerStatLine @relation(fields: [statLineId], references: [id])
+
+  // The league (different leagues can have different scoring)
+  leagueId        String
+  league          League @relation(fields: [leagueId], references: [id])
+
+  @@unique([statLineId, leagueId])  // One score per stat line per league
+  @@index([leagueId])
+  @@index([statLineId])
+}
+
+model TeamTotal {
+  id              String   @id @default(cuid())
+  totalPoints     Float
+  starterPoints   Float
+  benchPoints     Float
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // The fantasy team
+  fantasyTeamId   String
+  fantasyTeam     FantasyTeam   @relation(fields: [fantasyTeamId], references: [id])
+
+  // The scoring period
+  scoringPeriodId String
+  scoringPeriod   ScoringPeriod @relation(fields: [scoringPeriodId], references: [id])
+
+  @@unique([fantasyTeamId, scoringPeriodId])  // One total per team per period
+  @@index([fantasyTeamId])
+  @@index([scoringPeriodId])
+}
+
+// ============================================================================
+// DRAFT
+// ============================================================================
+
+model DraftSettings {
+  id              String   @id @default(cuid())
+  draftOrder      Json     @default("[]")  // Array of fantasy team IDs
+  secondsPerPick  Int      @default(60)
+  status          DraftStatus @default(NOT_STARTED)
+  currentPick     Int      @default(1)
+  currentRound    Int      @default(1)
+  startTime       DateTime?
+  endTime         DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // League
+  leagueId        String   @unique
+  league          League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  // Relations
+  picks           DraftPick[]
+
+  @@index([leagueId])
+  @@index([status])
+}
+
+enum DraftStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+}
+
+model DraftPick {
+  id              String   @id @default(cuid())
+  pickNumber      Int
+  round           Int
+  isAutoPick      Boolean  @default(false)
+  pickedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Draft
+  draftSettingsId String
+  draftSettings   DraftSettings @relation(fields: [draftSettingsId], references: [id], onDelete: Cascade)
+
+  // The team making the pick
+  fantasyTeamId   String
+  fantasyTeam     FantasyTeam @relation(fields: [fantasyTeamId], references: [id])
+
+  // The player picked
+  playerId        String
+  player          CdlPlayer @relation(fields: [playerId], references: [id])
+
+  @@unique([draftSettingsId, pickNumber])  // Unique pick number per draft
+  @@unique([draftSettingsId, playerId])     // Player can only be picked once per draft
+  @@index([draftSettingsId])
+  @@index([fantasyTeamId])
+}

@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: cdl-fantasy-db
+    environment:
+      POSTGRES_USER: cdl_user
+      POSTGRES_PASSWORD: cdl_password
+      POSTGRES_DB: cdl_fantasy
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdl_user -d cdl_fantasy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cdl-fantasy-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Optional: Bull Board UI for job monitoring
+  bull-board:
+    image: deadly0/bull-board:latest
+    container_name: cdl-fantasy-bull-board
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "3030:3000"
+    depends_on:
+      - redis
+
+volumes:
+  postgres_data:
+  redis_data:
